@@ -1,0 +1,4 @@
+node_modules/
+.env
+temp/
+client_secrets.json
