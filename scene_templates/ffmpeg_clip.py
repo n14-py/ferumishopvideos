@@ -124,7 +124,7 @@ def _build_visual_filter(es_video, has_text, has_logo):
         text_filter = (
             f"[{text_src}]drawtext=fontfile='{font_safe}':textfile='{{txt}}':"
             f"fontcolor={TOP_TEXT_COLOR}:fontsize={TOP_TEXT_SIZE}:"
-            f"borderw=5:bordercolor=black:line_spacing=8:"
+            f"borderw=5:bordercolor=black:line_spacing=10:"
             f"x=(w-text_w)/2:y={TOP_TEXT_Y}[with_text];"
         )
     else:

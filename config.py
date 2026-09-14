@@ -50,19 +50,19 @@ AUDIO_RATE = 48000
 TRANSITION_DURATION = 0.38
 
 # ==============================================================================
-# 3. OVERLAYS (logo centro un poco abajo, texto arriba, WhatsApp bajo el logo)
+# 3. OVERLAYS (logo más chico y más abajo, texto un poco más bajo)
 # ==============================================================================
-LOGO_WIDTH = 520
-LOGO_OPACITY = 0.68
-LOGO_Y_OFFSET = 36
+LOGO_WIDTH = 390
+LOGO_OPACITY = 0.42
+LOGO_Y_OFFSET = 470
 
-TOP_TEXT_Y = 155
-TOP_TEXT_SIZE = 64
-TOP_TEXT_MAX_CHARS = 20
-TOP_TEXT_MAX_LINES = 3
+TOP_TEXT_Y = 268
+TOP_TEXT_SIZE = 56
+TOP_TEXT_MAX_CHARS = 28
+TOP_TEXT_MAX_LINES = 4
 TOP_TEXT_COLOR = "white"
 
-WHATSAPP_FONT_SIZE = 42
+WHATSAPP_FONT_SIZE = 36
 WHATSAPP_COLOR = "white"
 DEFAULT_WHATSAPP = os.getenv("FERUMI_WHATSAPP", "595987301591")
 
