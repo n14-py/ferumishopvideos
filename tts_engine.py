@@ -74,8 +74,7 @@ def generate_audio_clip(text, voice_key, filename):
     # 1. Limpieza y validación
     clean_text = sanitize_text_for_tts(text)
     
-    # 2. Asignación de voz segura (Fallback a Tomás si no encuentra la voz)
-    voice_code = VOICES.get(voice_key, VOICES["hombre_1"])
+    voice_code = VOICES.get(voice_key, VOICES.get("mujer_1", "es-MX-DaliaNeural"))
     
     # 3. Ruta de salida
     output_path = os.path.join(TEMP_AUDIO_DIR, filename)

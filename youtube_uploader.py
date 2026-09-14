@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN DE YOUTUBE
 # ==============================================================================
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-MAX_ACCOUNTS = 4  # Tienes del token_0.json al token_3.json
+MAX_ACCOUNTS = 3  # Ferumishop: ~3 cuentas de YouTube (token_0..token_2)
 BASE_DIR = os.getcwd()
 
 LOCKS_DIR = os.path.join(BASE_DIR, "locks_history_shorts")
@@ -190,7 +190,7 @@ def get_authenticated_service(account_index):
         logger.error(f"  [YouTube] Error construyendo servicio: {e}")
         return None
 
-def upload_video(file_path, title, description, tags, category_id="25", thumbnail_path=None):
+def upload_video(file_path, title, description, tags, category_id="26", thumbnail_path=None):
     if not os.path.exists(file_path):
         logger.error("  [YouTube] Archivo de video vertical no encontrado.")
         return None

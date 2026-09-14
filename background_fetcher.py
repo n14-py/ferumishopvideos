@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-==============================================================================
-BACKGROUND FETCHER (Los Recolectores de Fondos - VERSIÓN SHORTS)
-==============================================================================
-Este módulo se conecta a APIs externas (Mapbox, Pexels, Pixabay) y a la web
-para descargar la "materia prima" visual adaptada al formato vertical 9:16.
-Incluye memoria anti-duplicación y blindaje anti-bots.
-"""
+"""Descarga de videos/fotos de producto para Shorts Ferumishop."""
 
 import os
 import time
 import random
 import logging
+import shutil
 import requests
 import subprocess
 import urllib.parse
@@ -19,241 +13,172 @@ from config import *
 
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# CLAVES DE APIS (Deben estar en tu archivo .env)
-# ==============================================================================
-MAPBOX_API_KEY = os.getenv("MAPBOX_API_KEY", "TU_CLAVE_MAPBOX_AQUI")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "TU_CLAVE_PEXELS_AQUI")
-PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "TU_CLAVE_PIXABAY_AQUI")
-
-# Historial global para no repetir videos de Pexels
 _historial_pexels = []
 
-# ==============================================================================
-# 1. RECOLECTOR DE LA FOTO REAL DE LA NOTICIA (MODO STEALTH BROWSER)
-# ==============================================================================
+VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 
-# Pon aquí la URL directa a tu logo para el 1% de casos que fallen
-URL_LOGO_FALLBACK = "https://noticias.lat/favicon.png" 
+
+def _is_video_ref(ref):
+    clean = (ref or "").split("?")[0].lower()
+    return clean.endswith(VIDEO_EXTS)
+
 
 def sanitizar_imagen(ruta_archivo):
-    """Verifica silenciosamente si es una imagen real sin ensuciar la consola"""
     clean_path = ruta_archivo + "_clean.jpg"
-    cmd_sanitize = [
-        "ffmpeg", "-y", "-v", "fatal", # 'fatal' oculta todos los errores feos de la consola
-        "-i", ruta_archivo,
-        # Mantenemos el scale para que no explote la RAM si descargan un poster 8K
+    cmd = [
+        "ffmpeg", "-y", "-v", "fatal", "-i", ruta_archivo,
         "-vf", "scale='min(1920,iw)':-2",
         "-frames:v", "1",
-        clean_path
+        clean_path,
     ]
     try:
-        # Silenciamos la salida completamente
-        subprocess.run(cmd_sanitize, timeout=10, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.replace(clean_path, ruta_archivo) 
+        subprocess.run(cmd, timeout=15, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.replace(clean_path, ruta_archivo)
         return True
-    except:
-        if os.path.exists(ruta_archivo): os.remove(ruta_archivo)
-        if os.path.exists(clean_path): os.remove(clean_path)
+    except Exception:
+        if os.path.exists(ruta_archivo):
+            os.remove(ruta_archivo)
+        if os.path.exists(clean_path):
+            os.remove(clean_path)
         return False
 
-def obtener_imagen_noticia(url, save_path, retries=3):
-    if not url or url == "":
-        url = URL_LOGO_FALLBACK
-        
-    logger.info(f"  [Fetcher Short] Descargando imagen: {url[:50]}...")
-    
-    # 🎭 EL DISFRAZ PERFECTO QUE FUNCIONÓ EN TUS PRUEBAS
-    cabeceras_falsas = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Referer": "https://www.google.com/"
-    }
-
-    for attempt in range(retries):
-        # ==========================================
-        # INTENTO 1: Descarga Directa Disfrazada
-        # ==========================================
-        try:
-            r = requests.get(url, headers=cabeceras_falsas, timeout=10)
-            if r.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(r.content)
-                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
-                    return save_path
-        except Exception:
-            pass
-
-        # ==========================================
-        # INTENTO 2: El Puente de Google (Alternativa)
-        # ==========================================
-        try:
-            url_magica = f"https://images10-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url={url}"
-            r_proxy = requests.get(url_magica, timeout=10)
-            if r_proxy.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(r_proxy.content)
-                if os.path.getsize(save_path) > 1024 and sanitizar_imagen(save_path):
-                    logger.info("  [Fetcher Short] Imagen obtenida exitosamente usando el Puente de Google.")
-                    return save_path
-        except Exception:
-            pass
-            
-        time.sleep(1)
-
-    # =========================================================================
-    # EL 1% DE FALLO: SALVAVIDAS ACTIVADO (LOGO NOTICIAS.LAT)
-    # =========================================================================
-    logger.warning(f"  [Fetcher Short] Bloqueo extremo detectado. Usando LOGO DE RESPALDO...")
-    try:
-        r_logo = requests.get(URL_LOGO_FALLBACK, verify=False, timeout=10)
-        if r_logo.status_code == 200:
-            with open(save_path, 'wb') as f:
-                f.write(r_logo.content)
-            if sanitizar_imagen(save_path):
-                return save_path
-    except Exception as e:
-        logger.error(f"  [Fetcher Short] Falló hasta el logo de respaldo: {e}")
-        
-    return None
-
-# ==============================================================================
-# 2. RECOLECTOR DE MAPAS (MAPBOX) - ADAPTADO A VERTICAL
-# ==============================================================================
-def obtener_mapa_mapbox(ubicacion_texto, save_path):
-    logger.info(f"  [Fetcher Short] Generando mapa vertical para: '{ubicacion_texto}'")
-    
-    if MAPBOX_API_KEY == "TU_CLAVE_MAPBOX_AQUI":
-        logger.error("  [Fetcher Short] ERROR: Falta MAPBOX_API_KEY en el entorno.")
-        return None
-
-    try:
-        query = urllib.parse.quote(ubicacion_texto)
-        geo_url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{query}.json?access_token={MAPBOX_API_KEY}&limit=1"
-        
-        geo_res = requests.get(geo_url, timeout=10)
-        geo_data = geo_res.json()
-        
-        if not geo_data.get('features'):
-            logger.warning(f"  [Fetcher Short] Mapbox no reconoció el lugar '{ubicacion_texto}'.")
-            return None
-            
-        lon, lat = geo_data['features'][0]['center']
-        
-        estilo = "dark-v10"
-        zoom = "13"
-        
-        # LA MAGIA DE SHORTS: La API de Mapbox tiene un límite de 1280px. 
-        # Pedimos 720x1280 (que es proporción exacta 9:16) y FFmpeg lo escalará a 1080x1920 luego.
-        ancho, alto = 720, 1280
-        
-        mapa_url = f"https://api.mapbox.com/styles/v1/mapbox/{estilo}/static/pin-s-marker+ff0000({lon},{lat})/{lon},{lat},{zoom},0,0/{ancho}x{alto}?access_token={MAPBOX_API_KEY}"
-        
-        mapa_res = requests.get(mapa_url, stream=True, timeout=15)
-        if mapa_res.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in mapa_res.iter_content(8192):
-                    f.write(chunk)
-            return save_path
-        else:
-            logger.error(f"  [Fetcher Short] Error Mapbox: HTTP {mapa_res.status_code}")
-            return None
-            
-    except Exception as e:
-        logger.error(f"  [Fetcher Short] Error fatal en Mapbox: {e}")
-        return None
-
-# ==============================================================================
-# 3. RECOLECTOR DE B-ROLL (PEXELS PORTRAIT CON MEMORIA ANTI-DUPLICACIÓN)
-# ==============================================================================
 
 def sanitizar_video(ruta_archivo):
-    """Verifica silenciosamente que el archivo bajado de Pexels sea un video real"""
-    cmd_check = [
+    cmd = [
         "ffprobe", "-v", "error",
         "-select_streams", "v:0",
         "-show_entries", "stream=codec_type",
         "-of", "default=nw=1:nk=1",
-        ruta_archivo
+        ruta_archivo,
     ]
     try:
-        resultado = subprocess.run(cmd_check, capture_output=True, text=True, timeout=5)
-        if "video" in resultado.stdout.lower():
-            return True
-        return False
-    except:
+        resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        return "video" in (resultado.stdout or "").lower()
+    except Exception:
         return False
 
+
+def _copy_local(ref, save_path):
+    local = ref.replace("file://", "")
+    if os.path.isfile(local):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        shutil.copy2(local, save_path)
+        return save_path if os.path.getsize(save_path) > 100 else None
+    return None
+
+
+def _download_url(url, save_path, retries=3):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Referer": "https://www.google.com/",
+    }
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, headers=headers, stream=True, timeout=40)
+            if r.status_code == 200:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                with open(save_path, "wb") as f:
+                    for chunk in r.iter_content(1024 * 256):
+                        if chunk:
+                            f.write(chunk)
+                if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
+                    return save_path
+        except Exception as e:
+            logger.warning("  [Fetcher] Intento %s falló: %s", attempt + 1, e)
+        time.sleep(0.8)
+    return None
+
+
+def obtener_media(ref, save_path):
+    """Acepta URL http(s) o ruta local de video/foto."""
+    if not ref:
+        return None
+    logger.info("  [Fetcher] Media: %s", str(ref)[:80])
+
+    local = _copy_local(ref, save_path)
+    if local:
+        return local
+
+    downloaded = _download_url(ref, save_path)
+    if not downloaded:
+        logger.error("  [Fetcher] No se pudo bajar: %s", ref[:80])
+        return None
+
+    if _is_video_ref(ref) or save_path.lower().endswith(VIDEO_EXTS):
+        if sanitizar_video(downloaded):
+            return downloaded
+        logger.warning("  [Fetcher] El archivo no es un video válido.")
+        try:
+            os.remove(downloaded)
+        except OSError:
+            pass
+        return None
+
+    if sanitizar_imagen(downloaded):
+        return downloaded
+    # Si el "jpg" era en realidad un video sin extensión
+    if sanitizar_video(downloaded):
+        return downloaded
+    return None
+
+
+def obtener_imagen_noticia(url, save_path, retries=3):
+    """Alias de compatibilidad con el JSON viejo (image_url)."""
+    return obtener_media(url, save_path)
+
+
 def obtener_video_stock(termino_busqueda, save_path):
+    """Respaldo opcional: B-roll vertical de Pexels si la IA manda type=pexels."""
     global _historial_pexels
-    logger.info(f"  [Fetcher Short] Buscando video vertical B-Roll sobre: '{termino_busqueda}'")
-    
+    logger.info("  [Fetcher] Pexels vertical: '%s'", termino_busqueda)
+
     if PEXELS_API_KEY == "TU_CLAVE_PEXELS_AQUI":
-        logger.error("  [Fetcher Short] ERROR: Falta PEXELS_API_KEY.")
+        logger.warning("  [Fetcher] No hay PEXELS_API_KEY. Saltando stock.")
         return None
 
     try:
         query = urllib.parse.quote(termino_busqueda)
-        # MAGIA SHORTS: Cambiamos orientation a portrait (Vertical)
         url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&per_page=15"
-        headers = {'Authorization': PEXELS_API_KEY}
-        
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers={"Authorization": PEXELS_API_KEY}, timeout=12)
         data = response.json()
-        
-        if not data.get('videos') or len(data['videos']) == 0:
-            logger.warning(f"  [Fetcher Short] Cero resultados verticales en Pexels para '{termino_busqueda}'.")
+        videos = data.get("videos") or []
+        if not videos:
             return None
-            
-        videos_disponibles = [v for v in data['videos'] if v['id'] not in _historial_pexels]
-        
-        if not videos_disponibles:
-            videos_disponibles = data['videos']
 
-        video_elegido = random.choice(videos_disponibles)
-        
-        _historial_pexels.append(video_elegido['id'])
+        disponibles = [v for v in videos if v.get("id") not in _historial_pexels] or videos
+        elegido = random.choice(disponibles)
+        _historial_pexels.append(elegido["id"])
         if len(_historial_pexels) > 50:
             _historial_pexels.pop(0)
 
+        files = elegido.get("video_files") or []
+        files.sort(key=lambda x: x.get("height", 0), reverse=True)
         video_link = None
-        video_files = video_elegido.get('video_files', [])
-        
-        # MAGIA SHORTS: Ordenamos por altura (height) para conseguir la mejor calidad vertical
-        video_files.sort(key=lambda x: x.get('height', 0), reverse=True)
-        
-        for file in video_files:
-            # Buscamos que tenga al menos 1280px de alto (HD vertical)
-            if file.get('link') and file.get('quality') == 'hd' and file.get('height', 0) >= 1280:
-                video_link = file['link']
+        for file in files:
+            if file.get("link") and file.get("height", 0) >= 1280:
+                video_link = file["link"]
                 break
-                
-        if not video_link and video_files:
-            video_link = video_files[0].get('link')
-            
+        if not video_link and files:
+            video_link = files[0].get("link")
         if not video_link:
             return None
-            
-        logger.info(f"  [Pexels Short] Descargando ID Vertical: {video_elegido['id']}")
-        
-        r = requests.get(video_link, stream=True, timeout=30)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    if chunk: f.write(chunk)
-            
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                if sanitizar_video(save_path):
-                    return save_path
-                else:
-                    logger.warning("  [Fetcher Short] ¡Video falso/corrupto de Pexels detectado! Abortando escena.")
-                    os.remove(save_path)
-                    return None
-        
-        logger.error(f"  [Fetcher Short] Error descargando MP4: HTTP {r.status_code}")
-        return None
 
+        r = requests.get(video_link, stream=True, timeout=40)
+        if r.status_code != 200:
+            return None
+        with open(save_path, "wb") as f:
+            for chunk in r.iter_content(1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 1024 and sanitizar_video(save_path):
+            return save_path
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return None
     except Exception as e:
-        logger.error(f"  [Fetcher Short] Error fatal en la API de Pexels: {e}")
+        logger.error("  [Fetcher] Error Pexels: %s", e)
         return None

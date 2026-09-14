@@ -1,0 +1,66 @@
+{
+  "article_id": "ferumi_labial_mate_prueba_01",
+  "youtube_title": "Labial mate Ferumi que dura TODO el día 💖",
+  "youtube_description": "Comprá en ferumi.shop 💖 Pedí por WhatsApp y te lo llevamos.\n\n#ferumi #ferumishop #maquillaje #labial #paraguay #shorts",
+  "youtube_tags": ["ferumi", "ferumishop", "maquillaje", "labial", "paraguay", "shorts"],
+  "whatsapp": "595987301591",
+  "texto_pantalla": "Labial mate Ferumi",
+  "scenes": [
+    {
+      "type": "video",
+      "text": "¿Cansada de que el labial se te borre a los diez minutos, linda?",
+      "texto_pantalla": "¿Se te borra el labial?",
+      "video_url": "https://EJEMPLO/clip1_hook.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Este labial mate de Ferumi te deja los labios perfectos desde la mañana hasta la noche.",
+      "texto_pantalla": "Labial mate que dura",
+      "video_url": "https://EJEMPLO/clip2_producto.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Textura suavecita, no reseca, y el color queda igualito aunque comas o tomes tereré.",
+      "texto_pantalla": "No se borra",
+      "video_url": "https://EJEMPLO/clip3_textura.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Tenemos varios tonos, del nude diario al rojo que te queda divino para salir.",
+      "texto_pantalla": "Varios tonos",
+      "video_url": "https://EJEMPLO/clip4_tonos.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Lo usás para el trabajo, para una cita, y no tenés que estar retocando cada rato.",
+      "texto_pantalla": "Todo el día",
+      "video_url": "https://EJEMPLO/clip5_uso.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Calidad que se nota, precio de tienda, y te llega a tu casa en Paraguay.",
+      "texto_pantalla": "Envío a todo el país",
+      "video_url": "https://EJEMPLO/clip6_envio.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Pedilo por WhatsApp ahora mismo y te armamos el pedido en un toque.",
+      "texto_pantalla": "Pedilo por WhatsApp",
+      "video_url": "https://EJEMPLO/clip7_whatsapp.mp4",
+      "voice": "mujer_1"
+    },
+    {
+      "type": "video",
+      "text": "Ferumi Shop. Tocá el perfil o escribinos y te asesoramos, linda.",
+      "texto_pantalla": "ferumi.shop",
+      "video_url": "https://EJEMPLO/clip8_cierre.mp4",
+      "voice": "mujer_1"
+    }
+  ]
+}

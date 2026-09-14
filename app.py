@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-==============================================================================
-APP.PY (Servidor Flask y Controlador de Tareas - VERSIÓN SHORTS)
-==============================================================================
-Punto de entrada de la aplicación. Levanta un servidor web que
-escucha las peticiones de Node.js, ejecuta el orquestador de Shorts en 
-segundo plano y maneja los bloqueos (Locks) para no saturar el servidor.
+Servidor Flask Ferumishop Shorts.
+Recibe el JSON de la IA (mismo contrato general que Noticias LAT:
+article_id, scenes, youtube_title/description/tags) y fabrica un Short
+1080x1920 @ 30fps: video tras video + logo + texto en pantalla + WhatsApp.
+
+Campos extra que la IA puede enviar:
+  - texto_pantalla / overlay_text / on_screen_text  (arriba al centro)
+  - whatsapp / whatsapp_number                       (debajo del logo)
+  - video_url / media_url / image_url por escena
+  - product_id como alias de article_id
 """
 
 import os
@@ -16,264 +20,198 @@ import requests
 import subprocess
 from flask import Flask, request, jsonify
 
-# Importamos nuestros módulos maestros adaptados
 import main_orchestrator
 import youtube_uploader
 import cloudflare_r2
 
-# ==============================================================================
-# CONFIGURACIÓN INICIAL
-# ==============================================================================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Variables de entorno 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "secreto123456")
 MAIN_API_URL = os.getenv("MAIN_API_URL", "https://lfaftechapi.onrender.com")
 PORT = int(os.getenv("PORT", 3001))
 
 app = Flask(__name__)
-
-# ==============================================================================
-# SEMÁFORO DE PROCESAMIENTO (ANTI-COLAPSO)
-# ==============================================================================
 processing_lock = threading.Lock()
 
+
 def _check_auth():
-    """Verifica que la petición venga de tu API en Node.js (Seguridad)."""
-    api_key = request.headers.get('x-api-key')
+    api_key = request.headers.get("x-api-key")
     return api_key == ADMIN_API_KEY
 
-# ==============================================================================
-# RUTAS DE LA API
-# ==============================================================================
 
-@app.route('/health', methods=['GET'])
+@app.route("/health", methods=["GET"])
 def health_check():
-    """Ruta para que Render sepa que el servidor está vivo."""
-    return jsonify({"status": "healthy", "server": "Noticias.lat Shorts Factory V2"}), 200
+    return jsonify({"status": "healthy", "server": "Ferumishop Shorts Factory"}), 200
 
-@app.route('/generate_video', methods=['POST'])
+
+@app.route("/generate_video", methods=["POST"])
 def handle_generate_video():
-    """Recibe el JSON con las escenas, las valida y encola el trabajo vertical."""
-    
-    # 1. Seguridad básica
     if not _check_auth():
-        logger.warning(f"  [API Short] Intento de acceso no autorizado desde {request.remote_addr}")
+        logger.warning("  [API] Acceso no autorizado desde %s", request.remote_addr)
         return jsonify({"error": "No autorizado. API Key inválida."}), 403
 
-    # 2. Obtener y validar el JSON
     payload = request.get_json()
     if not payload:
         return jsonify({"error": "No se envió un cuerpo JSON válido."}), 400
 
-    article_id = payload.get('article_id')
-    scenes = payload.get('scenes')
-    youtube_title = payload.get('youtube_title', 'Noticia de Última Hora #Shorts')
-    youtube_desc = payload.get('youtube_description', 'Mira la noticia completa en Noticias.lat #shorts #noticias')
-    youtube_tags = payload.get('youtube_tags', ['noticias', 'actualidad', 'shorts'])
+    article_id = payload.get("article_id") or payload.get("product_id")
+    scenes = payload.get("scenes") or payload.get("videos")
+    youtube_title = payload.get("youtube_title", "Ferumishop #Shorts")
+    youtube_desc = payload.get(
+        "youtube_description",
+        "Comprá en ferumi.shop 💖 #ferumi #maquillaje #shorts",
+    )
+    youtube_tags = payload.get("youtube_tags", ["ferumi", "ferumishop", "maquillaje", "shorts"])
 
     if not article_id or not scenes:
-        return jsonify({"error": "Faltan datos obligatorios: article_id o scenes."}), 400
+        return jsonify({"error": "Faltan datos obligatorios: article_id (o product_id) y scenes."}), 400
 
-    # 3. Filtro Anti-Bucle
+    payload["article_id"] = article_id
+
     if youtube_uploader.is_already_processed(article_id):
-        logger.info(f"  [API Short] Tarea {article_id} ignorada. Ya existe en el historial.")
+        logger.info("  [API] Tarea %s ignorada. Ya existe en el historial.", article_id)
         return jsonify({
             "message": "El Short ya fue generado y subido anteriormente.",
             "status": "completed",
-            "article_id": article_id
+            "article_id": article_id,
         }), 200
 
-# 4. Intentar adquirir el control del servidor (Lock)
     if processing_lock.acquire(blocking=False):
-        logger.info(f"  [API Short] [Lock Adquirido] Iniciando producción para ID: {article_id}")
-            
-# ----------------------------------------------------------------------
-            # HILO EN SEGUNDO PLANO (Background Task)
-            # ----------------------------------------------------------------------
+        logger.info("  [API] [Lock] Producción Ferumi ID: %s", article_id)
+
         def background_task():
             try:
-                # Paso A: Fabricar el video vertical (Llama al orquestador)
                 video_path = main_orchestrator.process_video_payload(payload)
-                
-                # Paso B: Subir a Cloudflare y YouTube
+
                 if video_path and os.path.exists(video_path):
-                    logger.info("  [Background Short] Video listo. Iniciando subidas...")
-                    
-                    # 1. Subir a Cloudflare R2
+                    logger.info("  [Background] Video listo. Subiendo el MISMO archivo a R2, YouTube y Taisly (TikTok/IG/FB).")
+
                     nombre_video_r2 = f"video_short_{article_id}.mp4"
                     url_r2 = cloudflare_r2.upload_media_to_r2(video_path, nombre_video_r2)
-                    
-                    # 2. Subir a YouTube Shorts
+
                     youtube_id = youtube_uploader.upload_video(
                         file_path=video_path,
                         title=youtube_title,
                         description=youtube_desc,
-                        tags=youtube_tags
+                        tags=youtube_tags,
                     )
-                    
-                    # 3. Notificar a Node.js (Solo si se subió a R2 o a YouTube)
+
                     if youtube_id or url_r2:
                         if youtube_id:
                             youtube_uploader.mark_as_processed(article_id, youtube_id)
-                            
-                        # Pasamos youtube_id Y url_r2 al webhook
-                        _notificar_webhook_node("video_complete", article_id, youtube_id=youtube_id, video_url=url_r2)
-                        
-                        # --- AUTODESTRUCCIÓN PARA LIBERAR ESPACIO ---
+                        _notificar_webhook_node(
+                            "video_complete", article_id, youtube_id=youtube_id, video_url=url_r2
+                        )
                         try:
                             os.remove(video_path)
-                            logger.info(f"  [Limpieza] Video borrado del disco: {video_path}")
-                            # Borrar también la miniatura si existe
-                            posible_jpg = video_path.rsplit('.', 1)[0] + '.jpg'
+                            logger.info("  [Limpieza] Video borrado del disco: %s", video_path)
+                            posible_jpg = video_path.rsplit(".", 1)[0] + ".jpg"
                             if os.path.exists(posible_jpg):
                                 os.remove(posible_jpg)
                         except Exception as e:
-                            logger.warning(f"  [Limpieza] No se pudo borrar el video: {e}")
-                        # --------------------------------------------
-                        
+                            logger.warning("  [Limpieza] No se pudo borrar el video: %s", e)
                     else:
-                        logger.error("  [Background Short] Falló la subida a YouTube y Cloudflare.")
+                        logger.error("  [Background] Falló la subida a YouTube y Cloudflare.")
                         _notificar_webhook_node("video_failed", article_id, error="YouTube/Cloudflare Upload Failed")
                 else:
-                    logger.error("  [Background Short] El orquestador no devolvió un video válido.")
+                    logger.error("  [Background] El orquestador no devolvió un video válido.")
                     _notificar_webhook_node("video_failed", article_id, error="Video Generation Failed")
 
             except Exception as e:
-                logger.error(f"  [Background Short] Error fatal en hilo de procesamiento: {e}")
+                logger.error("  [Background] Error fatal: %s", e)
                 _notificar_webhook_node("video_failed", article_id, error=str(e))
-                
             finally:
-                # ¡CRÍTICO! Liberar el servidor para la siguiente noticia
                 processing_lock.release()
-                logger.info(f"  [API Short] [Lock Liberado] Servidor listo para nueva tarea.")
+                logger.info("  [API] [Lock Liberado] Servidor listo.")
                 gc.collect()
 
-        # Lanzar el hilo
         thread = threading.Thread(target=background_task)
         thread.daemon = True
         thread.start()
 
-        # 5. Respuesta inmediata a Node.js
         return jsonify({
-            "message": "Tarea matricial aceptada. Fabricando Short en segundo plano.",
+            "message": "Tarea aceptada. Fabricando Short Ferumishop en segundo plano.",
             "status": "processing",
-            "article_id": article_id
+            "article_id": article_id,
         }), 202
 
-    else:
-        logger.warning(f"  [API Short] Servidor ocupado. Rechazando ID: {article_id}")
-        return jsonify({
-            "error": "El servidor está procesando otro Short. Reintente en unos minutos."
-        }), 503
+    logger.warning("  [API] Servidor ocupado. Rechazando ID: %s", article_id)
+    return jsonify({"error": "El servidor está procesando otro Short. Reintente en unos minutos."}), 503
 
-# ==============================================================================
-# SISTEMA DE NOTIFICACIONES (WEBHOOKS)
-# ==============================================================================
+
 def _notificar_webhook_node(endpoint, article_id, youtube_id=None, video_url=None, audio_url=None, error=None):
-    """
-    Se comunica de vuelta con tu API de Node.js para avisarle cómo terminó todo.
-    """
     webhook_url = f"{MAIN_API_URL}/api/articles/{endpoint}"
     headers = {"x-api-key": ADMIN_API_KEY}
-    
     payload = {"articleId": article_id}
     if youtube_id:
         payload["youtubeId"] = youtube_id
     if video_url:
-        payload["videoUrl"] = video_url # <--- Link de Cloudflare para Video
+        payload["videoUrl"] = video_url
     if audio_url:
-        payload["audioUrl"] = audio_url # <--- Link de Cloudflare para Audio MP3
+        payload["audioUrl"] = audio_url
     if error:
         payload["error"] = error
-
     try:
         r = requests.post(webhook_url, json=payload, headers=headers, timeout=15)
         if r.status_code == 200:
-            logger.info(f"  [Webhook Short] API de Node.js notificada con éxito ({endpoint}).")
+            logger.info("  [Webhook] API notificada (%s).", endpoint)
         else:
-            logger.warning(f"  [Webhook Short] La API de Node.js respondió con error {r.status_code}: {r.text}")
+            logger.warning("  [Webhook] API respondió %s: %s", r.status_code, r.text)
     except Exception as e:
-        logger.error(f"  [Webhook Short] Error de conexión al notificar a Node.js: {e}")
+        logger.error("  [Webhook] Error de conexión: %s", e)
 
-@app.route('/', methods=['GET'])
+
+@app.route("/", methods=["GET"])
 def index():
-    return "<h1>Noticias.lat - Motor Matricial SHORTS Activo</h1>", 200
+    return "<h1>Ferumishop — Motor de Shorts activo (1080p / 30fps)</h1>", 200
 
-# =====================================================================
-# 🎧 MICROSERVICIO DE AUDIO (Para el botón "Escuchar" de la App)
-# =====================================================================
+
 def background_audio_task(article_id, texto_completo):
-    logger.info(f"  [Audio] 🎙️ Iniciando locución completa para {article_id}")
+    logger.info("  [Audio] Locución completa para %s", article_id)
     try:
         nombre_archivo = f"audio_{article_id}.mp3"
-        # Aseguramos que la carpeta temp exista antes de guardar el audio
         os.makedirs("temp", exist_ok=True)
-        ruta_audio = f"temp/{nombre_archivo}" 
-        
-        # 1. Limpiamos comillas que puedan romper la consola
-        texto_limpio = texto_completo.replace('"', '').replace("'", "")
-        
-        # 2. Generamos el audio de corrido con la mejor voz
-        comando = f'edge-tts --voice "es-MX-JorgeNeural" --rate="+10%" --text "{texto_limpio}" --write-media {ruta_audio}'
+        ruta_audio = f"temp/{nombre_archivo}"
+        texto_limpio = texto_completo.replace('"', "").replace("'", "")
+        comando = f'edge-tts --voice "es-MX-DaliaNeural" --rate="+8%" --text "{texto_limpio}" --write-media {ruta_audio}'
         subprocess.run(comando, shell=True, check=True)
-        
-        # 3. Subimos el MP3 a Cloudflare R2
         url_r2 = cloudflare_r2.upload_media_to_r2(ruta_audio, nombre_archivo)
-        
-        # 4. Avisamos a Node.js que el AUDIO está listo
         if url_r2:
             _notificar_webhook_node("audio_complete", article_id, video_url=None, audio_url=url_r2)
-            
-        # 5. --- LIMPIEZA VITAL PARA NO LLENAR EL DISCO ---
-        try:
-            if os.path.exists(ruta_audio):
-                os.remove(ruta_audio)
-                logger.info(f"  [Limpieza] Audio borrado del disco: {ruta_audio}")
-        except Exception as e:
-            logger.warning(f"  [Limpieza] No se pudo borrar el audio local: {e}")
-            
+        if os.path.exists(ruta_audio):
+            os.remove(ruta_audio)
     except Exception as e:
-        logger.error(f"  [Audio Short] ❌ Error generando MP3: {e}")
+        logger.error("  [Audio] Error generando MP3: %s", e)
 
-@app.route('/api/tasks/audio', methods=['POST'])
+
+@app.route("/api/tasks/audio", methods=["POST"])
 def task_audio():
-    """Ruta que Node.js llamará para pedir un MP3 completo."""
     data = request.json
-    api_key = request.headers.get("x-api-key")
-    
-    if api_key != ADMIN_API_KEY:
+    if request.headers.get("x-api-key") != ADMIN_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
-        
     article_id = data.get("articleId")
     texto_completo = data.get("texto")
-    
     if not article_id or not texto_completo:
         return jsonify({"error": "Faltan datos"}), 400
-
-    # Lanzamos el proceso en segundo plano para no hacer esperar a Node.js
     thread = threading.Thread(target=background_audio_task, args=(article_id, texto_completo))
     thread.start()
-    
     return jsonify({"message": "Generación de audio iniciada", "articleId": article_id}), 202
+
 
 def run_cleanup_loop():
     import time
-    # Espera 10 segundos después de arrancar el servidor antes de hacer la primera limpieza
     time.sleep(10)
     while True:
         try:
             cloudflare_r2.delete_old_files_from_r2(days_old=28)
         except Exception as e:
-            logger.error(f"  Error en el bucle de limpieza automática de R2: {e}")
-        # Esperar 86400 segundos (24 horas) para la siguiente revisión
+            logger.error("  Error en limpieza R2: %s", e)
         time.sleep(86400)
 
-# --- NUEVO CÓDIGO: Lanzar el hilo fuera del if __name__ == '__main__' ---1
-# Al colocar esto aquí, nos aseguramos de que Render/Gunicorn inicie la limpieza automáticamente.
+
 cleanup_thread = threading.Thread(target=run_cleanup_loop, daemon=True)
 cleanup_thread.start()
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)

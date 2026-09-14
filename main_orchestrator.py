@@ -1,265 +1,266 @@
 # -*- coding: utf-8 -*-
-# ==============================================================================
-# MAIN ORCHESTRATOR SHORTS (NÚCLEO BLINDADO ANTI-CORRUPCIÓN 9:16)
-# ==============================================================================
+"""
+Orquestador Ferumishop: recibe el JSON de la IA y fabrica el Short.
+Mismo contrato general que Noticias LAT (article_id, scenes, youtube_*),
+pero las escenas son video tras video. Mapa / plantillas / tensión no se usan.
+"""
 
 import os
 import uuid
-import time
 import logging
 import gc
-import requests
 import subprocess
 
 from config import *
 import media_manager
 import background_fetcher
 import tts_engine
-
-import scene_templates.ffmpeg_intro as ffmpeg_intro
-import scene_templates.ffmpeg_01_mapa as ffmpeg_mapa
-import scene_templates.ffmpeg_02_pexels as ffmpeg_pexels
-import scene_templates.ffmpeg_universal as ffmpeg_universal
-import scene_templates.ffmpeg_ads as ffmpeg_ads
+import scene_templates.ffmpeg_clip as ffmpeg_clip
 
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# FUNCIÓN AUXILIAR: CONCATENACIÓN NUCLEAR (A PRUEBA DE BALAS PARA SHORTS)
-# ==============================================================================
-def concatenar_escenas(lista_escenas, output_path, unique_id):
-    """
-    Toma todas las escenas y las pasa por un filtro complejo que FUERZA 
-    la resolución vertical 9:16, el formato de píxeles, los FPS y el audio (Stereo 48kHz).
-    Es imposible que el video final se corrompa con este método.
-    """
-    if not lista_escenas:
-        return False
-        
-    try:
-        logger.info(f"  [Orchestrator Shorts] Ensamblando y normalizando {len(lista_escenas)} escenas (Modo Tanque Vertical)...")
-        
-        cmd = ["ffmpeg", "-y"]
-        filter_complex = ""
-        concat_inputs = ""
-        
-        # 1. Cargamos todos los inputs y construimos la normalización
-        for i, escena in enumerate(lista_escenas):
-            cmd.extend(["-i", escena])
-            
-            # Normalizar Video: Lo obligamos a tener el tamaño exacto (con letterbox si hiciera falta), FPS, ratio y pixeles.
-            filter_complex += f"[{i}:v]scale={RESOLUTION_W}:{RESOLUTION_H}:force_original_aspect_ratio=decrease,pad={RESOLUTION_W}:{RESOLUTION_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},format=yuv420p[v{i}];"
-            
-            # Normalizar Audio: Lo obligamos a ser Estéreo y a 48000Hz pase lo que pase.
-            filter_complex += f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
-            
-            # Preparamos la cadena del concat final
-            concat_inputs += f"[v{i}][a{i}]"
-            
-        # 2. El comando concat que une todo lo normalizado
-        filter_complex += f"{concat_inputs}concat=n={len(lista_escenas)}:v=1:a=1[outv][outa]"
-        
-        cmd.extend([
-            "-filter_complex", filter_complex,
-            "-map", "[outv]",
-            "-map", "[outa]",
-            "-c:v", "libx264",
-            "-preset", "superfast", # Compensamos velocidad aquí
-            "-threads", "4",
-            "-r", str(FPS),
-            "-c:a", "aac",
-            "-ar", "48000",
-            "-ac", "2",
-            "-b:a", "128k",
-            output_path
-        ])
-        
-        # Le damos tiempo suficiente porque está renderizando el master final
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
-        
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 1024
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"  [Orchestrator Shorts] Error de FFmpeg al concatenar: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"  [Orchestrator Shorts] Error crítico al concatenar: {e}")
-        return False
+CLIP_TYPES = {
+    "video", "clip", "body", "pexels", "intro",
+    "ad_video", "ad_mencion", "product", "foto", "image",
+}
+SKIP_TYPES = {"mapa", "map"}
 
-# ==============================================================================
-# FUNCIÓN AUXILIAR: DESCARGAR MULTIMEDIA DE ANUNCIOS
-# ==============================================================================
-def descargar_recurso_ad(url, save_path):
-    try:
-        logger.info(f"  [Orchestrator Shorts] Descargando recurso publicitario: {url}")
-        r = requests.get(url, stream=True, timeout=15)
-        if r.status_code == 200:
-            with open(save_path, 'wb') as f:
-                for chunk in r.iter_content(8192):
-                    f.write(chunk)
-            return save_path
-    except Exception as e:
-        logger.error(f"  [Orchestrator Shorts] Error descargando anuncio: {e}")
+MEDIA_KEYS = (
+    "video_url", "media_url", "clip_url", "ad_media_url",
+    "url", "video", "image_url",
+)
+TEXT_PANTALLA_KEYS = (
+    "texto_pantalla", "overlay_text", "on_screen_text",
+    "screen_text", "texto_en_pantalla", "caption", "titulo_pantalla",
+)
+WHATSAPP_KEYS = (
+    "whatsapp", "whatsapp_number", "numero_whatsapp",
+    "wa", "telefono", "phone",
+)
+
+
+def _first(data, keys, default=""):
+    if not data:
+        return default
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
+def extraer_whatsapp(payload, scene=None):
+    return (
+        _first(scene, WHATSAPP_KEYS)
+        or _first(payload, WHATSAPP_KEYS)
+        or DEFAULT_WHATSAPP
+    )
+
+
+def extraer_texto_pantalla(scene, payload):
+    text = _first(scene, TEXT_PANTALLA_KEYS) or _first(payload, TEXT_PANTALLA_KEYS)
+    if text:
+        return text
+    return payload.get("youtube_title") or ""
+
+
+def extraer_media_ref(scene):
+    if not scene:
+        return None
+    for key in MEDIA_KEYS:
+        value = scene.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict) and value.get("url"):
+            return str(value.get("url")).strip()
     return None
 
-# ==============================================================================
-# EL CEREBRO PRINCIPAL
-# ==============================================================================
+
+def _generar_silencio(path, segundos=3.0):
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"anullsrc=r={AUDIO_RATE}:cl=stereo",
+        "-t", str(segundos), "-q:a", "9", "-acodec", "libmp3lame",
+        path,
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    return path if os.path.exists(path) else None
+
+
+def _fallback_fondo(save_path):
+    logo = ffmpeg_clip._logo_file()
+    if logo and os.path.exists(logo):
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-i", logo,
+            "-f", "lavfi", "-i", f"color=c=0x1a0010:s={RESOLUTION_W}x{RESOLUTION_H}:r={FPS}",
+            "-filter_complex",
+            f"[1:v][0:v]overlay=(W-w)/2:(H-h)/2:format=auto,format=yuv420p[v]",
+            "-map", "[v]", "-t", "4", "-frames:v", "1", save_path,
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 100:
+            return save_path
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"color=c=0x2a0a18:s={RESOLUTION_W}x{RESOLUTION_H}:d=1",
+        "-frames:v", "1", save_path,
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    return save_path if os.path.exists(save_path) else None
+
+
+def resolver_fondo(scene, idx, unique_id, archivos_temporales, ultimo_fondo):
+    """Prioridad: video/foto de la IA → Pexels (si mandan termino) → clip anterior → logo."""
+    ref = extraer_media_ref(scene)
+    if ref:
+        dest = os.path.join(
+            TEMP_VIDEO_DIR if ref.lower().split("?")[0].endswith((".mp4", ".mov", ".webm", ".mkv", ".avi"))
+            else TEMP_IMG_DIR,
+            f"media_{unique_id}_{idx}{os.path.splitext(ref.split('?')[0])[1] or '.bin'}",
+        )
+        local = background_fetcher.obtener_media(ref, dest)
+        if local:
+            archivos_temporales.append(local)
+            return local
+
+    scene_type = (scene.get("type") or "").lower()
+    termino = scene.get("termino_busqueda") or scene.get("query")
+    if scene_type == "pexels" and termino:
+        dest = os.path.join(TEMP_VIDEO_DIR, f"pexels_{unique_id}_{idx}.mp4")
+        local = background_fetcher.obtener_video_stock(termino, dest)
+        if local:
+            archivos_temporales.append(local)
+            return local
+
+    if ultimo_fondo and os.path.exists(ultimo_fondo):
+        logger.info("  [Orchestrator] Reusando el clip anterior (la escena no trajo media).")
+        return ultimo_fondo
+
+    dest = os.path.join(TEMP_IMG_DIR, f"fallback_{unique_id}_{idx}.jpg")
+    local = _fallback_fondo(dest)
+    if local:
+        archivos_temporales.append(local)
+    return local
+
+
 def process_video_payload(payload):
-    article_id = payload.get("article_id", "NO_ID")
-    scenes = payload.get("scenes", [])
-    
+    article_id = payload.get("article_id") or payload.get("product_id") or "NO_ID"
+    scenes = payload.get("scenes") or []
+
+    # Atajo: la IA puede mandar una lista plana de videos
+    if not scenes and payload.get("videos"):
+        overlay = extraer_texto_pantalla({}, payload)
+        scenes = []
+        for item in payload.get("videos") or []:
+            if isinstance(item, str):
+                scenes.append({"type": "video", "video_url": item, "texto_pantalla": overlay})
+            elif isinstance(item, dict):
+                scene = dict(item)
+                scene.setdefault("type", "video")
+                scenes.append(scene)
+
     if not scenes:
+        logger.error("  [Orchestrator] El JSON no trae escenas ni videos.")
         return None
 
     unique_id = uuid.uuid4().hex[:8]
     final_output_path = os.path.join(OUTPUT_DIR, f"{article_id}_SHORT.mp4")
     thumbnail_output_path = os.path.join(OUTPUT_DIR, f"{article_id}_SHORT.jpg")
-    
+
     archivos_temporales = []
     escenas_renderizadas = []
     miniatura_creada = False
-    
-    logger.info(f"========== INICIANDO PRODUCCIÓN MATRICIAL SHORTS: NOTICIA {article_id} ==========")
-    
+    ultimo_fondo = None
+    whatsapp = extraer_whatsapp(payload)
+
+    logger.info("========== FERUMISHOP SHORT %s | %s escenas ==========", article_id, len(scenes))
+
     try:
         for idx, scene in enumerate(scenes):
-            logger.info(f"  --- Procesando Escena {idx + 1}/{len(scenes)} ---")
-            
-            scene_type = scene.get("type", "body") 
-            texto_guion = scene.get("text", "")
-            
-            ad_media_url = scene.get("ad_media_url")
-            ad_banner_url = scene.get("ad_banner_url")
+            scene_type = str(scene.get("type") or "video").lower().strip()
+            logger.info("  --- Clip %s/%s (%s) ---", idx + 1, len(scenes), scene_type)
 
+            if scene_type in SKIP_TYPES and not extraer_media_ref(scene):
+                logger.info("  [Orchestrator] Escena mapa ignorada (Ferumishop no usa mapas).")
+                continue
+            if scene_type not in CLIP_TYPES and not extraer_media_ref(scene) and not scene.get("text"):
+                logger.warning("  [Orchestrator] Tipo '%s' desconocido y sin media. Saltando.", scene_type)
+                continue
+
+            fondo_path = resolver_fondo(scene, idx, unique_id, archivos_temporales, ultimo_fondo)
+            if not fondo_path:
+                logger.error("  [Orchestrator] Sin fondo para el clip %s. Saltando.", idx)
+                continue
+            ultimo_fondo = fondo_path
+
+            texto_guion = (scene.get("text") or "").strip()
             audio_path = None
-
-            if scene_type != "ad_video":
-                if not texto_guion:
-                    logger.warning(f"  [Orchestrator Shorts] Escena {idx} sin texto. Poniendo un silencio para no romper nada.")
-                    audio_filename = f"audio_{unique_id}_{idx}.mp3"
-                    audio_path = os.path.join(TEMP_VIDEO_DIR, audio_filename)
-                    # Generar un mp3 de silencio de 3 segundos por seguridad
-                    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-q:a", "9", "-acodec", "libmp3lame", audio_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if scene_type != "ad_video" and texto_guion:
+                audio_filename = f"audio_{unique_id}_{idx}.mp3"
+                voz = scene.get("voice") or DEFAULT_VOICE
+                audio_path = tts_engine.generate_audio_clip(texto_guion, voz, audio_filename)
+                if audio_path:
                     archivos_temporales.append(audio_path)
-                else:
-                    audio_filename = f"audio_{unique_id}_{idx}.mp3"
-                    voz_elegida = scene.get("voice", "hombre_1")
-                    audio_path = tts_engine.generate_audio_clip(texto_guion, voz_elegida, audio_filename)
-                    if audio_path:
-                        archivos_temporales.append(audio_path)
-                    else:
-                        continue
+            if not audio_path:
+                audio_filename = f"audio_{unique_id}_{idx}_silencio.mp3"
+                audio_path = os.path.join(TEMP_AUDIO_DIR, audio_filename)
+                segundos = 5.0 if scene_type == "ad_video" else 3.0
+                audio_path = _generar_silencio(audio_path, segundos)
+                if audio_path:
+                    archivos_temporales.append(audio_path)
 
-            bgm_mood = scene.get("bgm_mood")
-            bgm_path = media_manager.get_random_bgm(bgm_mood) if bgm_mood else None
-
-            sfx_type = scene.get("sfx_type")
-            sfx_path = media_manager.get_random_sfx(sfx_type) if sfx_type else None
-            
-            # Descarga unificada de recursos publicitarios
-            local_ad_media = None
-            if ad_media_url:
-                ext = ".mp4" if ".mp4" in ad_media_url.lower() else ".jpg"
-                temp_ad_path = os.path.join(TEMP_VIDEO_DIR, f"ad_media_{unique_id}_{idx}{ext}")
-                local_ad_media = descargar_recurso_ad(ad_media_url, temp_ad_path)
-                if local_ad_media: archivos_temporales.append(local_ad_media)
-
-            local_ad_banner = None
-            if ad_banner_url:
-                ext_b = ".png" if ".png" in ad_banner_url.lower() else ".jpg"
-                temp_banner_path = os.path.join(TEMP_IMG_DIR, f"ad_banner_{unique_id}_{idx}{ext_b}")
-                local_ad_banner = descargar_recurso_ad(ad_banner_url, temp_banner_path)
-                if local_ad_banner: archivos_temporales.append(local_ad_banner)
-
+            texto_pantalla = extraer_texto_pantalla(scene, payload)
+            wa_clip = extraer_whatsapp(payload, scene)
             escena_output = os.path.join(TEMP_VIDEO_DIR, f"escena_{unique_id}_{idx}.mp4")
-            exito = False
 
-            if scene_type == "intro":
-                intro_path = media_manager.get_random_template("intros")
-                if intro_path:
-                    exito = ffmpeg_intro.ensamblar_intro(
-                        intro_path, audio_path, bgm_path, sfx_path, texto_guion, escena_output, local_ad_banner
-                    )
-            
-            elif scene_type == "mapa":
-                ubicacion = scene.get("ubicacion", "Paraguay")
-                overlay_path = media_manager.get_random_template("sin_presentador")
-                if overlay_path:
-                    exito = ffmpeg_mapa.renderizar_escena_mapa(
-                        ubicacion, overlay_path, audio_path, bgm_path, sfx_path, texto_guion, escena_output, unique_id, local_ad_banner
-                    )
-            
-            elif scene_type == "pexels":
-                termino = scene.get("termino_busqueda", "news")
-                overlay_path = media_manager.get_random_template(scene.get("layout_category", "sin_presentador"))
-                if overlay_path:
-                    exito = ffmpeg_pexels.renderizar_escena_pexels(
-                        termino, overlay_path, audio_path, bgm_path, sfx_path, texto_guion, escena_output, unique_id, local_ad_banner
-                    )
-            
-            elif scene_type == "body":
-                img_url = scene.get("image_url", "")
-                fondo_path = os.path.join(TEMP_IMG_DIR, f"bg_img_{unique_id}_{idx}.jpg")
-                fondo_path = background_fetcher.obtener_imagen_noticia(img_url, fondo_path)
-                
-                if fondo_path:
-                    archivos_temporales.append(fondo_path)
-                    overlay_path = media_manager.get_random_template(scene.get("layout_category", "hombre"))
-                    if overlay_path:
-                        exito = ffmpeg_universal.ensamblar_escena(
-                            fondo_path, overlay_path, audio_path, bgm_path, sfx_path, texto_guion, escena_output, local_ad_banner
-                        )
+            exito = ffmpeg_clip.renderizar_clip(
+                fondo_path=fondo_path,
+                audio_tts_path=audio_path,
+                texto_pantalla=texto_pantalla,
+                whatsapp_text=wa_clip,
+                sfx_path=None,
+                output_path=escena_output,
+            )
 
-            elif scene_type == "ad_video":
-                if local_ad_media:
-                    exito = ffmpeg_ads.renderizar_ad_video(local_ad_media, escena_output)
-                else:
-                    logger.error("  [Orchestrator Shorts] Falló la descarga del video publicitario.")
-
-            elif scene_type == "ad_mencion":
-                if local_ad_media and audio_path:
-                    overlay_path = media_manager.get_random_template("sin_presentador")
-                    if overlay_path:
-                        exito = ffmpeg_ads.renderizar_mencion(
-                            local_ad_media, overlay_path, audio_path, bgm_path, sfx_path, texto_guion, escena_output, unique_id, local_ad_banner
-                        )
-
-            # Validación de salida de escena
             if exito and os.path.exists(escena_output):
                 escenas_renderizadas.append(escena_output)
                 archivos_temporales.append(escena_output)
-                
-                # Generar miniatura solo si es la primera escena de tipo 'body'
-                if scene_type == "body" and not miniatura_creada:
+                if not miniatura_creada:
                     try:
-                        cmd_thumb = ["ffmpeg", "-y", "-ss", "00:00:02", "-i", escena_output, "-vframes", "1", "-q:v", "2", thumbnail_output_path]
+                        cmd_thumb = [
+                            "ffmpeg", "-y", "-ss", "00:00:01.2", "-i", escena_output,
+                            "-vframes", "1", "-q:v", "2", thumbnail_output_path,
+                        ]
                         subprocess.run(cmd_thumb, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        if os.path.exists(thumbnail_output_path):
-                            miniatura_creada = True 
+                        miniatura_creada = os.path.exists(thumbnail_output_path)
                     except Exception:
                         pass
             else:
-                logger.error(f"  [Orchestrator Shorts] Falló el ensamblaje de la escena {idx} ({scene_type}).")
+                logger.error("  [Orchestrator] Falló el clip %s (%s).", idx, scene_type)
 
-        # CONCATENACIÓN FINAL CON EL MOTOR BLINDADO
-        if len(escenas_renderizadas) > 0:
-            exito_final = concatenar_escenas(escenas_renderizadas, final_output_path, unique_id)
-            if exito_final:
-                logger.info(f"========== ¡SISTEMA SHORTS COMPLETADO EXITOSAMENTE! Video: {final_output_path} ==========")
-                return final_output_path
-            else:
-                logger.error("  [Orchestrator Shorts] Error en la concatenación de las escenas.")
-                return None
-        else:
+        if not escenas_renderizadas:
+            logger.error("  [Orchestrator] No se renderizó ningún clip.")
             return None
 
-    except Exception as e:
-        logger.error(f"  [Orchestrator Shorts] ERROR FATAL EN EL PROCESO: {e}")
+        whooshes = media_manager.list_whoosh_files()
+        exito_final = ffmpeg_clip.concatenar_con_transiciones(
+            escenas_renderizadas, final_output_path, whoosh_paths=whooshes
+        )
+        if exito_final:
+            logger.info("========== SHORT FERUMI LISTO: %s ==========", final_output_path)
+            return final_output_path
+
+        logger.error("  [Orchestrator] Falló el ensamblado final.")
         return None
-        
+
+    except Exception as e:
+        logger.error("  [Orchestrator] ERROR FATAL: %s", e)
+        return None
     finally:
-        logger.info("  [Orchestrator Shorts] Activando recolección de basura...")
+        logger.info("  [Orchestrator] Limpiando temporales...")
         for archivo in archivos_temporales:
             try:
                 if archivo and os.path.exists(archivo):
