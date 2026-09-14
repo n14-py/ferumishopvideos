@@ -108,8 +108,8 @@ def _build_visual_filter(es_video, has_text, has_logo):
     if has_logo:
         overlay = (
             f"[1:v]scale={LOGO_WIDTH}:-1,format=rgba,split=3[lg][sh][wh];"
-            f"[sh]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.55,boxblur=10:2[shadow];"
-            f"[wh]eq=saturation=0:brightness=0.9,colorchannelmixer=aa=0.55[halo];"
+            f"[sh]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.28,boxblur=8:2[shadow];"
+            f"[wh]eq=saturation=0:brightness=0.9,colorchannelmixer=aa=0.22[halo];"
             f"[lg]colorchannelmixer=aa={LOGO_OPACITY}[mark];"
             f"[bg][shadow]overlay=x=(W-w)/2+5:y=(H-h)/2+{LOGO_Y_OFFSET}+5[bg_sh];"
             f"[bg_sh][halo]overlay=x=(W-w)/2:y=(H-h)/2+{LOGO_Y_OFFSET}[bg_halo];"

@@ -52,8 +52,8 @@ TRANSITION_DURATION = 0.38
 # ==============================================================================
 # 3. OVERLAYS (logo más chico y más abajo, texto un poco más bajo)
 # ==============================================================================
-LOGO_WIDTH = 390
-LOGO_OPACITY = 0.42
+LOGO_WIDTH = 300
+LOGO_OPACITY = 0.28
 LOGO_Y_OFFSET = 470
 
 TOP_TEXT_Y = 268
