@@ -1,7 +1,7 @@
 {
   "name": "tts-fmpeg-worker",
   "version": "1.0.0",
-  "description": "Worker de medios para Noticias.lat (TTS y FFmpeg)",
+  "description": "Worker de medios para Ferumishop (TTS y FFmpeg Shorts)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

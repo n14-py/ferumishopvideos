@@ -1,4 +1,12 @@
 node_modules/
 .env
 temp/
+temp_audio/
+temp_video/
+temp_processing/
+output/
+__pycache__/
+*.pyc
+locks_history_shorts/
+locks_history/
 client_secrets.json
