@@ -36,21 +36,32 @@ if not os.path.exists(LOCKS_DIR):
 # ==============================================================================
 # CONFIGURACIÓN DE TAISLY (API PRIVADA)
 # ==============================================================================
-TAISLY_API_KEY = os.getenv("TAISLY_API_KEY", "taisly_dc97bfef8a1e9")
+TAISLY_API_KEY = os.getenv(
+    "TAISLY_API_KEY",
+    "taisly_dc97bfef8a1e9ae497d86440d8185f4d42f5f5ce138f1251c6e26654880566a8",
+)
 TAISLY_BASE_URL = "https://app.taisly.com/api/private"
 
-# Agrupación exacta extraída de tu consulta (3 Grupos: TikTok + Facebook)
+# Mismo video, mismo grupo: YouTube N -> TikTok N + Instagram N + Facebook N
 TAISLY_GROUPS = [
-    # Grupo 0: noticias.lat (TikTok) + Noticias Lat (Facebook)
-    ["6a446bc0c66678771be347b0", "6a446c6fc66678771be347e3", "6a468895c66678771be391f1"],
-    
-    # Grupo 1: noticias.lat0 (TikTok) + Noticias LAT Última Hora (Facebook)
-    ["69fe63635270a878fbd897bc", "6a446c79c66678771be347f1"],
-    
-    # Grupo 2: noticias.lat2 (TikTok) + Noticias LAT AHORA (Facebook)
-    ["6a45a0f0c66678771be378fb", "6a459e46c66678771be37573"]
-
-    
+    # Grupo 0 / Cuenta 1: YT token_0 + TikTok ferumishop1 + IG ferumishop1 + FB Ferumishop
+    [
+        "6aa83b092011524ebf444c75",  # TikTok ferumishop1
+        "6aa840742011524ebf444e6b",  # Instagram ferumishop1
+        "6a45e119c66678771be37f48",  # Facebook Ferumishop
+    ],
+    # Grupo 1 / Cuenta 2: YT token_1 + TikTok ferumishop2 + IG ferumishop2 + FB Ferumi Shop Paraguay
+    [
+        "6aa83bf02011524ebf444cbf",  # TikTok ferumishop2
+        "6aa840b92011524ebf444e82",  # Instagram ferumishop2
+        "6aa83da72011524ebf444d94",  # Facebook Ferumi Shop Paraguay
+    ],
+    # Grupo 2 / Cuenta 3: YT token_2 + TikTok ferumishop3 + IG ferumishop3 + FB Ferumi Shop
+    [
+        "6aa83cf02011524ebf444d0e",  # TikTok ferumishop3
+        "6aa8411a2011524ebf444f4a",  # Instagram ferumishop3
+        "6aa83db22011524ebf444da2",  # Facebook Ferumi Shop
+    ],
 ]
 
 # ==============================================================================
@@ -96,23 +107,20 @@ def mark_as_processed(article_id, video_id):
         logger.warning(f"  [YouTube/Taisly] No se pudo guardar historial para {article_id}: {e}")
 
 # ==============================================================================
-# INTEGRACIÓN TAISLY (TIKTOK & FACEBOOK MÚLTIPLE)
+# INTEGRACIÓN TAISLY (TIKTOK + INSTAGRAM + FACEBOOK)
 # ==============================================================================
 def push_to_taisly(file_path, title, description, tags, account_index):
     """
-    Publica en TikTok y Facebook a la vez usando la API Privada de Taisly.
-    Adapta el texto a los límites de TikTok y mapea el índice de YouTube al Grupo.
+    Publica el MISMO video en TikTok, Instagram y Facebook vía Taisly.
+    Si YouTube usa la cuenta N, Taisly usa el grupo N (TikTok N + IG N + FB N).
     """
-    # Mapeo matemático: Si el index de YT es 3, vuelve al grupo 0 de Taisly (3 % 3 = 0)
+    # Mapeo matemático: YT 0->Grupo 0, YT 1->Grupo 1, YT 2->Grupo 2 (y vuelve a 0)
     grupo_taisly_index = account_index % len(TAISLY_GROUPS)
     plataformas_destino = TAISLY_GROUPS[grupo_taisly_index]
     
-    logger.info(f"  [Taisly] Publicando en Grupo {grupo_taisly_index} (IDs: {plataformas_destino})...")
+    logger.info(f"  [Taisly] Publicando en Grupo {grupo_taisly_index} (TikTok + Instagram + Facebook: {plataformas_destino})...")
     
-    # Preparación segura del texto para TikTok/Facebook
-    # Título + breve extracto + hashtags (limitado a unos ~450 caracteres por seguridad visual)
-# Preparación optimizada para TikTok, Instagram Reels y Facebook Reels
-    # Se permite más texto (hasta 1000 caracteres) y más hashtags (hasta 10)
+    # Preparación para TikTok, Instagram Reels y Facebook Reels
     texto_post = f"{title}\n\n{description[:800]}..."
 
     if tags:
@@ -141,7 +149,7 @@ def push_to_taisly(file_path, title, description, tags, account_index):
             if response.status_code in [200, 201]:
                 res_json = response.json()
                 if res_json.get("success"):
-                    logger.info(f"  [Taisly] ¡ÉXITO! Video publicado en TikTok y FB (Grupo {grupo_taisly_index}).")
+                    logger.info(f"  [Taisly] ¡ÉXITO! Video publicado en TikTok, Instagram y Facebook (Grupo {grupo_taisly_index}).")
                     return True
                 else:
                     logger.error(f"  [Taisly] Fallo lógico en Taisly: {res_json}")
